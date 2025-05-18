@@ -1,10 +1,11 @@
 import entity.Item;
 import jakarta.persistence.LockModeType;
-import org.hibernate.HibernateException;
 import org.hibernate.Session;
 import org.hibernate.SessionFactory;
-import org.hibernate.cfg.Configuration;
+import util.HibernateUtil;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -12,20 +13,18 @@ import java.util.concurrent.Executors;
 
 
 public class Main {
-    public static void main(String[] args) {
-        final SessionFactory sessionFactory;
-
+    public static void main(String[] args) throws InterruptedException {
+        final SessionFactory sessionFactory = HibernateUtil.getSessionFactory();
+        final ExecutorService executor = Executors.newFixedThreadPool(8);
+        List<Thread> threads = new ArrayList<>();
         try{
-            sessionFactory = new Configuration().configure().buildSessionFactory();
-        } catch (HibernateException e) {
-            throw new RuntimeException(e);
-        }
-        try(final ExecutorService executor = Executors.newFixedThreadPool(8)){
             final int totalTasks = 8;
             try{
                 for (int i = 0; i < totalTasks; i++){
 
                     executor.submit(()-> {
+                        Thread currentThread = Thread.currentThread();
+                        threads.add(currentThread);
                         int count = 20000;
                         Random rand = new Random();
                         for(; count != 0; count--){
@@ -36,12 +35,37 @@ public class Main {
                                 session.merge(item);
                                 session.getTransaction().commit();
                             }
+                            try {
+                                Thread.sleep(5);
+                            } catch (InterruptedException e) {
+                                throw new RuntimeException(e);
+                            }
                         }
                     });
                 }
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
+        } catch (RuntimeException e) {
+            throw new RuntimeException(e);
+        }finally {
+            executor.shutdown();
         }
+
+        for(Thread thread : threads){
+            thread.join();
+        }
+
+        try(Session session = sessionFactory.openSession()){
+            session.beginTransaction();
+            int sumVal = 0;
+            List<Item> items = session.createQuery("SELECT i FROM Item i;", Item.class).setLockMode(LockModeType.PESSIMISTIC_READ).getResultList();
+            for (Item item : items){
+                sumVal += item.getVal();
+            }
+            System.out.println(sumVal);
+            session.getTransaction().commit();
+        }
+        HibernateUtil.shutdown();
     }
 }
